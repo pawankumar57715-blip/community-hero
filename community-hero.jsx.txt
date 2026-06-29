@@ -1,0 +1,649 @@
+import { useState, useEffect, useRef } from "react";
+
+const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"; // Replace before deploying
+
+// ── Gemini helper ──────────────────────────────────────────────
+async function callGemini(prompt, imageBase64 = null) {
+  const parts = [];
+  if (imageBase64) {
+    parts.push({ inline_data: { mime_type: "image/jpeg", data: imageBase64 } });
+  }
+  parts.push({ text: prompt });
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts }] }),
+    }
+  );
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response";
+}
+
+// ── Mock data ──────────────────────────────────────────────────
+const MOCK_ISSUES = [
+  { id: 1, title: "Large pothole on MG Road", category: "Roads", severity: "High", status: "In Progress", location: "MG Road, Hyderabad", votes: 34, timestamp: "2h ago", reportedBy: "Ravi K.", image: null, description: "Deep pothole causing vehicle damage near Café Coffee Day junction." },
+  { id: 2, title: "Broken streetlight near Jubilee Hills", category: "Lighting", severity: "Medium", status: "Reported", location: "Jubilee Hills, Hyderabad", votes: 18, timestamp: "5h ago", reportedBy: "Priya M.", image: null, description: "3 streetlights non-functional for past 2 weeks. Safety concern at night." },
+  { id: 3, title: "Garbage pile near Ameerpet Metro", category: "Sanitation", severity: "High", status: "Resolved", location: "Ameerpet, Hyderabad", votes: 52, timestamp: "1d ago", reportedBy: "Ahmed S.", image: null, description: "Uncollected garbage overflowing on pavement near metro exit." },
+  { id: 4, title: "Water leakage on Banjara Hills Rd 12", category: "Water", severity: "Critical", status: "In Progress", location: "Banjara Hills, Hyderabad", votes: 67, timestamp: "3h ago", reportedBy: "Sunita R.", image: null, description: "Water main leaking for over 24 hours causing road flooding." },
+  { id: 5, title: "Illegal dumping near Hussain Sagar", category: "Sanitation", severity: "Medium", status: "Reported", location: "Hussain Sagar, Hyderabad", votes: 11, timestamp: "6h ago", reportedBy: "Kiran T.", image: null, description: "Construction debris dumped illegally near the lake affecting aesthetics." },
+];
+
+const CATEGORIES = ["Roads", "Lighting", "Sanitation", "Water", "Parks", "Traffic", "Other"];
+const SEVERITIES = ["Low", "Medium", "High", "Critical"];
+const STATUSES = ["Reported", "In Progress", "Resolved"];
+
+const SEVERITY_COLORS = {
+  Low: { bg: "#e8f5e9", text: "#2e7d32", dot: "#43a047" },
+  Medium: { bg: "#fff8e1", text: "#f57f17", dot: "#ffb300" },
+  High: { bg: "#fce4ec", text: "#c62828", dot: "#e53935" },
+  Critical: { bg: "#3d0000", text: "#ff6b6b", dot: "#ff1744" },
+};
+
+const STATUS_COLORS = {
+  Reported: { bg: "#e3f2fd", text: "#1565c0" },
+  "In Progress": { bg: "#fff3e0", text: "#e65100" },
+  Resolved: { bg: "#e8f5e9", text: "#1b5e20" },
+};
+
+const CATEGORY_ICONS = {
+  Roads: "🛣️", Lighting: "💡", Sanitation: "🗑️",
+  Water: "💧", Parks: "🌳", Traffic: "🚦", Other: "📌",
+};
+
+// ── Components ─────────────────────────────────────────────────
+function Badge({ label, colors }) {
+  return (
+    <span style={{
+      background: colors.bg, color: colors.text,
+      padding: "2px 10px", borderRadius: 20, fontSize: 11,
+      fontWeight: 700, letterSpacing: 0.3,
+    }}>{label}</span>
+  );
+}
+
+function IssueCard({ issue, onVote, onSelect }) {
+  const sev = SEVERITY_COLORS[issue.severity];
+  const sta = STATUS_COLORS[issue.status];
+  return (
+    <div onClick={() => onSelect(issue)} style={{
+      background: "#fff", borderRadius: 14, padding: "16px 18px",
+      marginBottom: 12, cursor: "pointer", border: "1.5px solid #f0f0f0",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+      transition: "transform 0.15s, box-shadow 0.15s",
+    }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.1)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.05)"; }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>{CATEGORY_ICONS[issue.category]}</span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", lineHeight: 1.3 }}>{issue.title}</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>📍 {issue.location}</div>
+          </div>
+        </div>
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          background: "#f7f7fa", borderRadius: 10, padding: "6px 10px",
+          cursor: "pointer", minWidth: 44,
+        }} onClick={e => { e.stopPropagation(); onVote(issue.id); }}>
+          <span style={{ fontSize: 16 }}>▲</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#5c6bc0" }}>{issue.votes}</span>
+        </div>
+      </div>
+      <p style={{ fontSize: 12, color: "#666", margin: "0 0 10px", lineHeight: 1.5 }}>{issue.description.slice(0, 80)}...</p>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <Badge label={issue.severity} colors={sev} />
+        <Badge label={issue.status} colors={sta} />
+        <Badge label={issue.category} colors={{ bg: "#f3e5f5", text: "#6a1b9a" }} />
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#aaa" }}>{issue.timestamp}</span>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ icon, value, label, color }) {
+  return (
+    <div style={{
+      background: "#fff", borderRadius: 14, padding: "16px 20px",
+      flex: 1, minWidth: 100, textAlign: "center",
+      boxShadow: "0 2px 10px rgba(0,0,0,0.06)", border: "1.5px solid #f0f0f0",
+    }}>
+      <div style={{ fontSize: 24, marginBottom: 4 }}>{icon}</div>
+      <div style={{ fontSize: 28, fontWeight: 900, color }}>{value}</div>
+      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>{label}</div>
+    </div>
+  );
+}
+
+// ── Main App ───────────────────────────────────────────────────
+export default function CommunityHero() {
+  const [view, setView] = useState("feed"); // feed | report | detail | dashboard
+  const [issues, setIssues] = useState(MOCK_ISSUES);
+  const [selected, setSelected] = useState(null);
+  const [filter, setFilter] = useState("All");
+  const [searchQ, setSearchQ] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState("");
+  const [chatMsg, setChatMsg] = useState("");
+  const [chatHistory, setChatHistory] = useState([
+    { role: "ai", text: "👋 Hi! I'm your Community Hero AI. Ask me about local issues, how to report problems, or get insights on community data." }
+  ]);
+  const [notification, setNotification] = useState(null);
+
+  // Report form state
+  const [form, setForm] = useState({ title: "", description: "", category: "Roads", severity: "Medium", location: "", image: null, imageBase64: null });
+  const fileRef = useRef();
+
+  function notify(msg, color = "#43a047") {
+    setNotification({ msg, color });
+    setTimeout(() => setNotification(null), 3000);
+  }
+
+  function handleVote(id) {
+    setIssues(prev => prev.map(i => i.id === id ? { ...i, votes: i.votes + 1 } : i));
+    notify("Vote recorded! 🎉");
+  }
+
+  function handleImageUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const base64 = ev.target.result.split(",")[1];
+      setForm(f => ({ ...f, image: ev.target.result, imageBase64: base64 }));
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function handleAIAnalyze() {
+    if (!form.imageBase64 && !form.description) return;
+    setAiLoading(true);
+    setAiResult("");
+    try {
+      const prompt = `You are a smart community issue analyzer for Hyderabad, India.
+Analyze this community issue report and provide:
+1. Suggested Category (from: Roads, Lighting, Sanitation, Water, Parks, Traffic, Other)
+2. Severity Assessment (Low/Medium/High/Critical) with reason
+3. Estimated Resolution Time
+4. Which government department should handle this
+5. Priority Score (1-10)
+6. Quick action recommendation
+
+Issue Title: ${form.title || "Not provided"}
+Description: ${form.description || "See image"}
+Location: ${form.location || "Hyderabad"}
+
+Respond in a clear, structured format.`;
+      const result = await callGemini(prompt, form.imageBase64);
+      setAiResult(result);
+      // Auto-fill category if mentioned
+      for (const cat of CATEGORIES) {
+        if (result.toLowerCase().includes(cat.toLowerCase())) {
+          setForm(f => ({ ...f, category: cat }));
+          break;
+        }
+      }
+      for (const sev of SEVERITIES) {
+        if (result.toLowerCase().includes(sev.toLowerCase())) {
+          setForm(f => ({ ...f, severity: sev }));
+          break;
+        }
+      }
+    } catch (err) {
+      setAiResult("⚠️ AI analysis unavailable. Please fill in the form manually.");
+    }
+    setAiLoading(false);
+  }
+
+  function handleSubmitIssue() {
+    if (!form.title || !form.location) { notify("Please fill title and location", "#e53935"); return; }
+    const newIssue = {
+      id: issues.length + 1,
+      ...form,
+      votes: 0,
+      status: "Reported",
+      timestamp: "Just now",
+      reportedBy: "You",
+    };
+    setIssues(prev => [newIssue, ...prev]);
+    setForm({ title: "", description: "", category: "Roads", severity: "Medium", location: "", image: null, imageBase64: null });
+    setAiResult("");
+    notify("Issue reported successfully! 🚀");
+    setView("feed");
+  }
+
+  async function handleChat() {
+    if (!chatMsg.trim()) return;
+    const userMsg = chatMsg.trim();
+    setChatHistory(h => [...h, { role: "user", text: userMsg }]);
+    setChatMsg("");
+    try {
+      const context = `You are Community Hero AI, an assistant for a citizen issue reporting platform in Hyderabad, India.
+Current issues in system: ${issues.length} total, ${issues.filter(i => i.status === "Resolved").length} resolved, ${issues.filter(i => i.severity === "Critical").length} critical.
+Categories represented: ${[...new Set(issues.map(i => i.category))].join(", ")}.
+Be helpful, concise, and encouraging about civic participation.`;
+      const prompt = `${context}\n\nUser question: ${userMsg}`;
+      const reply = await callGemini(prompt);
+      setChatHistory(h => [...h, { role: "ai", text: reply }]);
+    } catch {
+      setChatHistory(h => [...h, { role: "ai", text: "Sorry, I'm having trouble connecting. Please try again." }]);
+    }
+  }
+
+  const filtered = issues.filter(i => {
+    const matchCat = filter === "All" || i.category === filter || filter === i.status;
+    const matchSearch = !searchQ || i.title.toLowerCase().includes(searchQ.toLowerCase()) || i.location.toLowerCase().includes(searchQ.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  const resolved = issues.filter(i => i.status === "Resolved").length;
+  const critical = issues.filter(i => i.severity === "Critical").length;
+  const totalVotes = issues.reduce((s, i) => s + i.votes, 0);
+
+  // ── RENDER ──────────────────────────────────────────────────
+  return (
+    <div style={{ fontFamily: "'Inter', 'Segoe UI', sans-serif", background: "#f4f6fb", minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative" }}>
+
+      {/* Notification */}
+      {notification && (
+        <div style={{
+          position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)",
+          background: notification.color, color: "#fff", padding: "10px 24px",
+          borderRadius: 30, fontWeight: 700, fontSize: 13, zIndex: 1000,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.2)", whiteSpace: "nowrap",
+        }}>{notification.msg}</div>
+      )}
+
+      {/* Header */}
+      <div style={{
+        background: "linear-gradient(135deg, #1a237e 0%, #283593 50%, #3949ab 100%)",
+        padding: "20px 20px 16px", color: "#fff",
+        boxShadow: "0 4px 20px rgba(26,35,126,0.3)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.5 }}>
+              🦸 Community Hero
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>Hyderabad Citizens Platform</div>
+          </div>
+          <div style={{
+            background: "rgba(255,255,255,0.15)", borderRadius: 20,
+            padding: "4px 12px", fontSize: 12, fontWeight: 700,
+          }}>
+            {issues.length} Issues
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          {[
+            { label: "Reported", val: issues.length, color: "#90caf9" },
+            { label: "Resolved", val: resolved, color: "#a5d6a7" },
+            { label: "Critical", val: critical, color: "#ef9a9a" },
+            { label: "Upvotes", val: totalVotes, color: "#fff59d" },
+          ].map(s => (
+            <div key={s.label} style={{
+              flex: 1, background: "rgba(255,255,255,0.1)", borderRadius: 10,
+              padding: "8px 4px", textAlign: "center",
+            }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: s.color }}>{s.val}</div>
+              <div style={{ fontSize: 9, opacity: 0.8, fontWeight: 600 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Nav */}
+      <div style={{
+        display: "flex", background: "#fff", borderBottom: "2px solid #eee",
+        position: "sticky", top: 0, zIndex: 100,
+      }}>
+        {[
+          { id: "feed", label: "🏠 Feed" },
+          { id: "report", label: "➕ Report" },
+          { id: "dashboard", label: "📊 Insights" },
+          { id: "chat", label: "🤖 AI Chat" },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setView(tab.id)} style={{
+            flex: 1, padding: "12px 4px", border: "none", background: "none",
+            fontSize: 11, fontWeight: 700, cursor: "pointer",
+            color: view === tab.id ? "#3949ab" : "#888",
+            borderBottom: view === tab.id ? "3px solid #3949ab" : "3px solid transparent",
+            transition: "all 0.2s",
+          }}>{tab.label}</button>
+        ))}
+      </div>
+
+      <div style={{ padding: "16px", paddingBottom: 80 }}>
+
+        {/* ── FEED VIEW ── */}
+        {view === "feed" && (
+          <div>
+            <input
+              placeholder="🔍 Search issues, locations..."
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              style={{
+                width: "100%", padding: "10px 14px", borderRadius: 10,
+                border: "1.5px solid #e0e0e0", fontSize: 13, marginBottom: 12,
+                background: "#fff", boxSizing: "border-box", outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 14, paddingBottom: 4 }}>
+              {["All", ...CATEGORIES, "Resolved", "In Progress"].map(f => (
+                <button key={f} onClick={() => setFilter(f)} style={{
+                  padding: "6px 14px", borderRadius: 20, border: "none",
+                  background: filter === f ? "#3949ab" : "#fff",
+                  color: filter === f ? "#fff" : "#555",
+                  fontWeight: 700, fontSize: 11, cursor: "pointer", whiteSpace: "nowrap",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+                }}>{f}</button>
+              ))}
+            </div>
+            {filtered.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#aaa" }}>
+                <div style={{ fontSize: 40 }}>🔍</div>
+                <div style={{ fontWeight: 700, marginTop: 8 }}>No issues found</div>
+              </div>
+            ) : (
+              filtered.map(issue => (
+                <IssueCard key={issue.id} issue={issue} onVote={handleVote} onSelect={i => { setSelected(i); setView("detail"); }} />
+              ))
+            )}
+          </div>
+        )}
+
+        {/* ── DETAIL VIEW ── */}
+        {view === "detail" && selected && (
+          <div>
+            <button onClick={() => setView("feed")} style={{
+              background: "none", border: "none", color: "#3949ab",
+              fontWeight: 700, fontSize: 14, cursor: "pointer", padding: "0 0 12px",
+            }}>← Back to Feed</button>
+            <div style={{ background: "#fff", borderRadius: 16, padding: 20, boxShadow: "0 2px 12px rgba(0,0,0,0.07)" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>{CATEGORY_ICONS[selected.category]}</div>
+              <h2 style={{ margin: "0 0 6px", fontSize: 18, color: "#1a1a2e" }}>{selected.title}</h2>
+              <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6 }}>{selected.description}</p>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "12px 0" }}>
+                <Badge label={selected.severity} colors={SEVERITY_COLORS[selected.severity]} />
+                <Badge label={selected.status} colors={STATUS_COLORS[selected.status]} />
+                <Badge label={selected.category} colors={{ bg: "#f3e5f5", text: "#6a1b9a" }} />
+              </div>
+              <div style={{ background: "#f7f7fa", borderRadius: 10, padding: 12, fontSize: 12, color: "#555" }}>
+                <div>📍 {selected.location}</div>
+                <div style={{ marginTop: 4 }}>👤 Reported by {selected.reportedBy}</div>
+                <div style={{ marginTop: 4 }}>🕐 {selected.timestamp}</div>
+              </div>
+              <button onClick={() => handleVote(selected.id)} style={{
+                width: "100%", marginTop: 16, padding: "14px", borderRadius: 12,
+                background: "#3949ab", color: "#fff", border: "none",
+                fontWeight: 700, fontSize: 14, cursor: "pointer",
+              }}>▲ Upvote this Issue ({selected.votes})</button>
+
+              {/* AI Analysis button */}
+              <button onClick={async () => {
+                setAiLoading(true); setAiResult("");
+                const prompt = `Analyze this community issue in Hyderabad:
+Title: ${selected.title}
+Category: ${selected.category}
+Severity: ${selected.severity}
+Location: ${selected.location}
+Description: ${selected.description}
+
+Provide:
+1. Root cause analysis
+2. Impact on community
+3. Recommended solution steps
+4. Expected resolution timeline
+5. Similar issues to watch for`;
+                const r = await callGemini(prompt);
+                setAiResult(r); setAiLoading(false);
+              }} style={{
+                width: "100%", marginTop: 8, padding: "14px", borderRadius: 12,
+                background: "#fff", color: "#3949ab", border: "2px solid #3949ab",
+                fontWeight: 700, fontSize: 14, cursor: "pointer",
+              }}>🤖 Get AI Analysis</button>
+              {aiLoading && <div style={{ textAlign: "center", color: "#3949ab", padding: 16, fontWeight: 700 }}>Analyzing with Gemini AI... ✨</div>}
+              {aiResult && (
+                <div style={{
+                  background: "linear-gradient(135deg, #e8eaf6, #f3e5f5)",
+                  borderRadius: 12, padding: 16, marginTop: 12, fontSize: 13, lineHeight: 1.7, color: "#333",
+                  border: "1px solid #c5cae9",
+                }}>
+                  <div style={{ fontWeight: 800, color: "#3949ab", marginBottom: 8 }}>🤖 Gemini AI Analysis</div>
+                  <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{aiResult}</pre>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── REPORT VIEW ── */}
+        {view === "report" && (
+          <div>
+            <h2 style={{ margin: "0 0 16px", fontSize: 18, color: "#1a1a2e" }}>📸 Report an Issue</h2>
+
+            {/* Image Upload */}
+            <div
+              onClick={() => fileRef.current.click()}
+              style={{
+                border: "2px dashed #c5cae9", borderRadius: 14, padding: 20,
+                textAlign: "center", cursor: "pointer", marginBottom: 14,
+                background: form.image ? "#f3e5f5" : "#f7f8ff",
+              }}
+            >
+              {form.image ? (
+                <img src={form.image} alt="preview" style={{ maxHeight: 160, borderRadius: 10, maxWidth: "100%" }} />
+              ) : (
+                <>
+                  <div style={{ fontSize: 36 }}>📷</div>
+                  <div style={{ fontSize: 13, color: "#888", marginTop: 8, fontWeight: 600 }}>Tap to upload photo</div>
+                  <div style={{ fontSize: 11, color: "#aaa" }}>AI will auto-analyze it</div>
+                </>
+              )}
+            </div>
+            <input type="file" accept="image/*" ref={fileRef} style={{ display: "none" }} onChange={handleImageUpload} />
+
+            {[
+              { label: "Issue Title *", key: "title", placeholder: "e.g. Pothole on MG Road" },
+              { label: "Location *", key: "location", placeholder: "e.g. MG Road near Café Coffee Day" },
+              { label: "Description", key: "description", placeholder: "Describe the issue in detail...", multiline: true },
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#444", display: "block", marginBottom: 4 }}>{f.label}</label>
+                {f.multiline ? (
+                  <textarea
+                    value={form[f.key]}
+                    onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    rows={3}
+                    style={{
+                      width: "100%", padding: "10px 12px", borderRadius: 10,
+                      border: "1.5px solid #e0e0e0", fontSize: 13, resize: "none",
+                      fontFamily: "inherit", boxSizing: "border-box", outline: "none",
+                    }}
+                  />
+                ) : (
+                  <input
+                    value={form[f.key]}
+                    onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    style={{
+                      width: "100%", padding: "10px 12px", borderRadius: 10,
+                      border: "1.5px solid #e0e0e0", fontSize: 13,
+                      boxSizing: "border-box", outline: "none",
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#444", display: "block", marginBottom: 4 }}>Category</label>
+                <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontSize: 13, background: "#fff" }}>
+                  {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#444", display: "block", marginBottom: 4 }}>Severity</label>
+                <select value={form.severity} onChange={e => setForm(f => ({ ...f, severity: e.target.value }))}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontSize: 13, background: "#fff" }}>
+                  {SEVERITIES.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <button onClick={handleAIAnalyze} disabled={aiLoading} style={{
+              width: "100%", padding: "13px", borderRadius: 12,
+              background: "linear-gradient(135deg, #7c4dff, #3949ab)",
+              color: "#fff", border: "none", fontWeight: 700, fontSize: 14,
+              cursor: aiLoading ? "wait" : "pointer", marginBottom: 10,
+            }}>
+              {aiLoading ? "🤖 Analyzing with Gemini AI..." : "🤖 AI Auto-Analyze"}
+            </button>
+
+            {aiResult && (
+              <div style={{
+                background: "linear-gradient(135deg, #e8eaf6, #f3e5f5)",
+                borderRadius: 12, padding: 14, marginBottom: 12, fontSize: 12, lineHeight: 1.7, color: "#333",
+                border: "1px solid #c5cae9",
+              }}>
+                <div style={{ fontWeight: 800, color: "#3949ab", marginBottom: 6 }}>✨ AI Recommendation</div>
+                <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0 }}>{aiResult}</pre>
+              </div>
+            )}
+
+            <button onClick={handleSubmitIssue} style={{
+              width: "100%", padding: "14px", borderRadius: 12,
+              background: "#1a237e", color: "#fff", border: "none",
+              fontWeight: 800, fontSize: 15, cursor: "pointer",
+            }}>🚀 Submit Issue</button>
+          </div>
+        )}
+
+        {/* ── DASHBOARD VIEW ── */}
+        {view === "dashboard" && (
+          <div>
+            <h2 style={{ margin: "0 0 16px", fontSize: 18, color: "#1a1a2e" }}>📊 Community Insights</h2>
+
+            <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+              <StatCard icon="📋" value={issues.length} label="Total Issues" color="#3949ab" />
+              <StatCard icon="✅" value={resolved} label="Resolved" color="#43a047" />
+              <StatCard icon="🔴" value={critical} label="Critical" color="#e53935" />
+            </div>
+
+            {/* Category breakdown */}
+            <div style={{ background: "#fff", borderRadius: 14, padding: 16, marginBottom: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
+              <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 12, color: "#1a1a2e" }}>Issues by Category</div>
+              {CATEGORIES.map(cat => {
+                const count = issues.filter(i => i.category === cat).length;
+                if (!count) return null;
+                const pct = Math.round((count / issues.length) * 100);
+                return (
+                  <div key={cat} style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                      <span>{CATEGORY_ICONS[cat]} {cat}</span>
+                      <span style={{ color: "#3949ab" }}>{count} ({pct}%)</span>
+                    </div>
+                    <div style={{ background: "#f0f0f0", borderRadius: 6, height: 8 }}>
+                      <div style={{ background: "linear-gradient(90deg, #3949ab, #7c4dff)", borderRadius: 6, height: 8, width: `${pct}%`, transition: "width 0.5s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Top voted */}
+            <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
+              <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 12, color: "#1a1a2e" }}>🏆 Top Voted Issues</div>
+              {[...issues].sort((a, b) => b.votes - a.votes).slice(0, 3).map((issue, i) => (
+                <div key={issue.id} style={{
+                  display: "flex", alignItems: "center", gap: 12, padding: "10px 0",
+                  borderBottom: i < 2 ? "1px solid #f0f0f0" : "none",
+                }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: "50%", background: ["#ffd700", "#c0c0c0", "#cd7f32"][i],
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 900, fontSize: 14, color: "#fff", flexShrink: 0,
+                  }}>{i + 1}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a2e" }}>{issue.title}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{issue.location}</div>
+                  </div>
+                  <div style={{ fontWeight: 900, color: "#5c6bc0", fontSize: 16 }}>▲{issue.votes}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── CHAT VIEW ── */}
+        {view === "chat" && (
+          <div>
+            <h2 style={{ margin: "0 0 12px", fontSize: 18, color: "#1a1a2e" }}>🤖 AI Assistant</h2>
+            <div style={{ background: "#fff", borderRadius: 14, padding: 12, height: 380, overflowY: "auto", marginBottom: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
+              {chatHistory.map((msg, i) => (
+                <div key={i} style={{
+                  display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                  marginBottom: 10,
+                }}>
+                  <div style={{
+                    maxWidth: "80%", padding: "10px 14px", borderRadius: 14,
+                    background: msg.role === "user" ? "#3949ab" : "#f0f1ff",
+                    color: msg.role === "user" ? "#fff" : "#333",
+                    fontSize: 13, lineHeight: 1.5,
+                    borderBottomRightRadius: msg.role === "user" ? 4 : 14,
+                    borderBottomLeftRadius: msg.role === "ai" ? 4 : 14,
+                  }}>{msg.text}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={chatMsg}
+                onChange={e => setChatMsg(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleChat()}
+                placeholder="Ask about community issues..."
+                style={{
+                  flex: 1, padding: "12px 14px", borderRadius: 12,
+                  border: "1.5px solid #e0e0e0", fontSize: 13, outline: "none",
+                }}
+              />
+              <button onClick={handleChat} style={{
+                padding: "12px 18px", borderRadius: 12, background: "#3949ab",
+                color: "#fff", border: "none", fontWeight: 700, cursor: "pointer", fontSize: 16,
+              }}>→</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              {["Show critical issues", "How to report an issue?", "Resolution stats", "Most common problems"].map(q => (
+                <button key={q} onClick={() => { setChatMsg(q); }} style={{
+                  padding: "5px 10px", borderRadius: 20, border: "1px solid #c5cae9",
+                  background: "#f0f1ff", color: "#3949ab", fontSize: 11, cursor: "pointer", fontWeight: 600,
+                }}>{q}</button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* FAB - Report button */}
+      {view === "feed" && (
+        <button onClick={() => setView("report")} style={{
+          position: "fixed", bottom: 24, right: 24,
+          width: 56, height: 56, borderRadius: "50%",
+          background: "linear-gradient(135deg, #3949ab, #7c4dff)",
+          color: "#fff", border: "none", fontSize: 28, cursor: "pointer",
+          boxShadow: "0 6px 20px rgba(57,73,171,0.4)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>+</button>
+      )}
+    </div>
+  );
+}
